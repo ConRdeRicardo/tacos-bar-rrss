@@ -1,0 +1,32 @@
+{
+  "name": "rrss-stories-microservice",
+  "version": "1.0.0",
+  "description": "Microservicio para procesar y publicar fotos en Instagram Stories (9:16) vía Telegram Bot, con retención temporal de 48h en Supabase y respaldo en Google Drive.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "instagram",
+    "stories",
+    "telegram-bot",
+    "sharp",
+    "supabase",
+    "google-drive",
+    "meta-graph-api"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "googleapis": "^144.0.0",
+    "node-cron": "^3.0.3",
+    "sharp": "^0.33.5",
+    "telegraf": "^4.16.3"
+  }
+}
