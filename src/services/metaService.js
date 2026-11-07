@@ -10,8 +10,6 @@ const MAX_POLL_ATTEMPTS = 25; // 25 * 3s = 75s máximo de espera
  */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-
-
 /**
  * Crea un contenedor de media de tipo STORIES en Meta Graph API v21.0.
  * 
@@ -84,10 +82,8 @@ export async function pollStoryContainerStatus(containerId) {
         throw new Error(`El procesamiento del contenedor falló en Meta con estado: ${status_code} (${status || 'Sin detalle'})`);
       }
 
-      // Si está en 'IN_PROGRESS', esperamos 3 segundos antes del siguiente intento
       await sleep(SLEEP_INTERVAL_MS);
     } catch (error) {
-      // Si el error viene de la validación interna de status_code, relanzarlo
       if (error.message.includes('falló en Meta con estado')) {
         throw error;
       }
@@ -101,54 +97,6 @@ export async function pollStoryContainerStatus(containerId) {
   }
 
   throw new Error(`Timeout agotado (${MAX_POLL_ATTEMPTS * (SLEEP_INTERVAL_MS / 1000)}s) esperando que el contenedor ${containerId} esté listo en Meta.`);
-}
-
-/**
- * Publica una historia en la Fan Page de Facebook vinculada
- */
-export async function publishFacebookStory(imageUrl) {
-  const pageId = process.env.FACEBOOK_PAGE_ID;
-  const accessToken = process.env.META_ACCESS_TOKEN;
-
-  if (!pageId) {
-    console.warn('[META] FACEBOOK_PAGE_ID no configurado. Saltando Facebook Story.');
-    return null;
-  }
-
-  try {
-    // 1. Subir la imagen a la página como foto temporal no publicada
-    const uploadRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${pageId}/photos`,
-      null,
-      {
-        params: {
-          url: imageUrl,
-          published: false,
-          access_token: accessToken,
-        },
-      }
-    );
-
-    const photoId = uploadRes.data.id;
-
-    // 2. Crear la historia de foto a partir de ese ID
-    const storyRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${pageId}/photo_stories`,
-      null,
-      {
-        params: {
-          photo_id: photoId,
-          access_token: accessToken,
-        },
-      }
-    );
-
-    console.log(`[META] Historia publicada en Facebook Page: ${storyRes.data.post_id || 'OK'}`);
-    return storyRes.data;
-  } catch (error) {
-    console.error('[META ERROR] Error al publicar historia en Facebook:', error.response?.data || error.message);
-    throw new Error(`Facebook Story Error: ${error.response?.data?.error?.message || error.message}`);
-  }
 }
 
 /**
@@ -190,22 +138,14 @@ export async function publishStoryMediaContainer(containerId) {
 }
 
 /**
- * Flujo completo de publicación de una Historia en Instagram:
- * 1. Crear contenedor (media_type: STORIES).
- * 2. Polling cada 3 segundos hasta status_code === FINISHED.
- * 3. Publicar el contenedor en la cuenta de Instagram.
+ * Flujo completo de publicación de una Historia en Instagram.
  * 
  * @param {string} publicImageUrl - URL pública de la imagen
  * @returns {Promise<{ containerId: string, mediaId: string }>}
  */
 export async function publishStoryToInstagram(publicImageUrl) {
-  // 1. Crear contenedor
   const containerId = await createStoryMediaContainer(publicImageUrl);
-
-  // 2. Esperar a que Meta finalice la descarga y codificación de la imagen
   await pollStoryContainerStatus(containerId);
-
-  // 3. Publicar en Instagram
   const mediaId = await publishStoryMediaContainer(containerId);
 
   return {
@@ -214,9 +154,94 @@ export async function publishStoryToInstagram(publicImageUrl) {
   };
 }
 
+/**
+ * Publica una historia en la Fan Page de Facebook vinculada.
+ * 
+ * @param {string} imageUrl - URL pública de la imagen (Supabase)
+ * @returns {Promise<object|null>}
+ */
+export async function publishFacebookStory(imageUrl) {
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const accessToken = config.meta.accessToken || process.env.META_ACCESS_TOKEN;
+
+  if (!pageId) {
+    console.warn('[META] FACEBOOK_PAGE_ID no configurado. Saltando Facebook Story.');
+    return null;
+  }
+
+  try {
+    // 1. Subir la imagen a la página como foto temporal no publicada
+    const uploadRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${pageId}/photos`,
+      null,
+      {
+        params: {
+          url: imageUrl,
+          published: false,
+          access_token: accessToken,
+        },
+      }
+    );
+
+    const photoId = uploadRes.data.id;
+
+    // 2. Crear la historia de foto a partir de ese ID
+    const storyRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${pageId}/photo_stories`,
+      null,
+      {
+        params: {
+          photo_id: photoId,
+          access_token: accessToken,
+        },
+      }
+    );
+
+    console.log(`[META] Historia publicada con éxito en Facebook Page: ${storyRes.data.post_id || 'OK'}`);
+    return storyRes.data;
+  } catch (error) {
+    const metaError = error.response?.data?.error;
+    const errorDetails = metaError
+      ? `[Meta Error ${metaError.code}]: ${metaError.message}`
+      : error.message;
+
+    console.error(`[META ERROR] Error al publicar historia en Facebook: ${errorDetails}`);
+    throw new Error(`Facebook Story Error: ${errorDetails}`);
+  }
+}
+
+/**
+ * Publica la historia tanto en Instagram como en Facebook en paralelo.
+ * 
+ * @param {string} publicImageUrl - URL pública de la imagen
+ * @returns {Promise<{ instagram: object, facebook: object|null }>}
+ */
+export async function publishStoryToAll(publicImageUrl) {
+  const results = { instagram: null, facebook: null };
+
+  // 1. Disparo a Instagram
+  try {
+    results.instagram = await publishStoryToInstagram(publicImageUrl);
+  } catch (err) {
+    console.error('[META] Fallo al publicar en Instagram:', err.message);
+    throw err;
+  }
+
+  // 2. Disparo a Facebook (captura error individual para no tumbar la confirmación de IG si FB falla)
+  try {
+    results.facebook = await publishFacebookStory(publicImageUrl);
+  } catch (err) {
+    console.error('[META] Fallo al publicar en Facebook:', err.message);
+  }
+
+  return results;
+}
+
 export default {
   createStoryMediaContainer,
   pollStoryContainerStatus,
   publishStoryMediaContainer,
-  publishStoryToInstagram
+  publishStoryToInstagram,
+  publishFacebookStory,
+  publishStoryToAll
 };
