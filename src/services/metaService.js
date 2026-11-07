@@ -10,6 +10,8 @@ const MAX_POLL_ATTEMPTS = 25; // 25 * 3s = 75s máximo de espera
  */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+
+
 /**
  * Crea un contenedor de media de tipo STORIES en Meta Graph API v21.0.
  * 
@@ -99,6 +101,54 @@ export async function pollStoryContainerStatus(containerId) {
   }
 
   throw new Error(`Timeout agotado (${MAX_POLL_ATTEMPTS * (SLEEP_INTERVAL_MS / 1000)}s) esperando que el contenedor ${containerId} esté listo en Meta.`);
+}
+
+/**
+ * Publica una historia en la Fan Page de Facebook vinculada
+ */
+export async function publishFacebookStory(imageUrl) {
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const accessToken = process.env.META_ACCESS_TOKEN;
+
+  if (!pageId) {
+    console.warn('[META] FACEBOOK_PAGE_ID no configurado. Saltando Facebook Story.');
+    return null;
+  }
+
+  try {
+    // 1. Subir la imagen a la página como foto temporal no publicada
+    const uploadRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${pageId}/photos`,
+      null,
+      {
+        params: {
+          url: imageUrl,
+          published: false,
+          access_token: accessToken,
+        },
+      }
+    );
+
+    const photoId = uploadRes.data.id;
+
+    // 2. Crear la historia de foto a partir de ese ID
+    const storyRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${pageId}/photo_stories`,
+      null,
+      {
+        params: {
+          photo_id: photoId,
+          access_token: accessToken,
+        },
+      }
+    );
+
+    console.log(`[META] Historia publicada en Facebook Page: ${storyRes.data.post_id || 'OK'}`);
+    return storyRes.data;
+  } catch (error) {
+    console.error('[META ERROR] Error al publicar historia en Facebook:', error.response?.data || error.message);
+    throw new Error(`Facebook Story Error: ${error.response?.data?.error?.message || error.message}`);
+  }
 }
 
 /**
