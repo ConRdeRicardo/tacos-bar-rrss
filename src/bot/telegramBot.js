@@ -32,17 +32,17 @@ bot.command(['start', 'help'], async (ctx) => {
   const welcomeText = `
 🎉 <b>Bot de Automatización de Historias - Discoteca / Tacos Bar</b>
 
-Envía una foto para procesarla y publicarla en Instagram Stories:
+Envía una foto para procesarla y publicarla en Instagram & Facebook Stories:
 
 1️⃣ <b>Envío:</b> Manda la imagen como foto estándar o como archivo/documento.
 2️⃣ <b>Motor Gráfico:</b> Se recortará con IA/atención a <b>1080x1920 (9:16)</b>, con plantilla oficial y fecha dinámica.
 3️⃣ <b>Almacenamiento:</b> Subida temporal (48h) en Supabase + Respaldo seguro en Google Drive.
-4️⃣ <b>Control:</b> Previsualiza el resultado y decide si publicar de inmediato o programar.
+4️⃣ <b>Control:</b> Previsualiza el resultado, obtén el archivo en alta resolución y decide si publicar de inmediato o programar.
 
 🆔 <b>Tu ID de Telegram:</b> <code>${ctx.from.id}</code>
   `.trim();
 
-   ctx.reply(welcomeText, { parse_mode: 'HTML' });
+  ctx.reply(welcomeText, { parse_mode: 'HTML' });
 });
 
 bot.command('id', (ctx) => {
@@ -60,22 +60,22 @@ async function handleImageMessage(ctx, fileId) {
   let statusMessage = null;
 
   try {
-    statusMessage =  ctx.reply('⏳ <i>Descargando imagen y procesando formato Historia 9:16...</i>', {
+    statusMessage = await ctx.reply('⏳ <i>Descargando imagen y procesando formato Historia 9:16...</i>', {
       parse_mode: 'HTML'
     });
 
     // 1. Obtener enlace de descarga de Telegram
-    const fileLink =  ctx.telegram.getFileLink(fileId);
+    const fileLink = await ctx.telegram.getFileLink(fileId);
 
     // 2. Descargar imagen en memoria como Buffer
-    const downloadResponse =  axios.get(fileLink.href, {
+    const downloadResponse = await axios.get(fileLink.href, {
       responseType: 'arraybuffer',
       timeout: 30000
     });
     const rawBuffer = Buffer.from(downloadResponse.data);
 
     // 3. Procesar imagen con Sharp (1080x1920, cover attention, plantilla PNG y SVG fecha)
-    const processedBuffer =  imageProcessor.processStoryImage(rawBuffer);
+    const processedBuffer = await imageProcessor.processStoryImage(rawBuffer);
 
     // Actualizar mensaje de estado
     await ctx.telegram.editMessageText(
@@ -107,24 +107,28 @@ async function handleImageMessage(ctx, fileId) {
 
     // 6. Enviar previsualización con teclado inline interactivo
     const dateFormatted = imageProcessor.getFormattedSpanishDate();
+    const driveLinkText = storageResult.driveWebLink 
+      ? `<a href="${storageResult.driveWebLink}">Ver en Google Drive</a>` 
+      : '✅ Asegurado';
+
     const caption = `
-✨ <b>Previsualización de Historia (9:16)</b>
+✨ <b>Historia Procesada (1080x1920 px)</b>
 
 📅 <b>Fecha:</b> ${dateFormatted}
-📐 <b>Dimensiones:</b> 1080 x 1920 px
-☁️ <b>Storage:</b> Supabase (Retención 48h)
-📁 <b>Respaldo Drive:</b> ${storageResult.driveFileId ? '✅ Asegurado' : '⚠️ No disponible'}
+🔗 <b>Enlace directo:</b> <a href="${storageResult.publicUrl}">Abrir imagen procesada</a>
+📁 <b>Respaldo Drive:</b> ${driveLinkText}
 
-Selecciona una acción:
+Selecciona una acción para continuar:
     `.trim();
 
     const inlineKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('📱 Publicar Historia Ahora', `pub:${storyRecord.id}`)],
+      [Markup.button.callback('📱 Publicar Historia (IG + FB)', `pub:${storyRecord.id}`)],
       [Markup.button.callback('⏰ Programar para las 10:00 PM', `sch:22:00:${storyRecord.id}`)],
       [Markup.button.callback('⏰ Programar para las 11:30 PM', `sch:23:30:${storyRecord.id}`)],
       [Markup.button.callback('❌ Descartar', `disc:${storyRecord.id}`)]
     ]);
 
+    // 1. Enviar previsualización con botones de publicación
     await ctx.replyWithPhoto(
       { source: processedBuffer },
       {
@@ -133,6 +137,16 @@ Selecciona una acción:
         ...inlineKeyboard
       }
     );
+
+    // 2. Enviar el archivo original sin compresión para descarga directa (ideal para TikTok / WhatsApp)
+    await ctx.replyWithDocument(
+      { source: processedBuffer, filename: `historia_${Date.now()}.jpg` },
+      {
+        caption: '📥 <b>Archivo original en alta resolución (1080x1920)</b> listo para guardar en el celular y subir a TikTok o WhatsApp.',
+        parse_mode: 'HTML'
+      }
+    );
+
   } catch (error) {
     console.error(`[ERROR BOT] Fallo al procesar imagen: ${error.message}`);
     if (statusMessage) {
@@ -176,13 +190,13 @@ bot.on('document', async (ctx) => {
 // 4. ACCIONES DEL TECLADO INLINE (CALLBACK QUERIES)
 // ==============================================================================
 
-// Acción: Publicar Historia Ahora
+// Acción: Publicar Historia Ahora (Instagram + Facebook)
 bot.action(/^pub:(.+)$/, async (ctx) => {
   const storyId = ctx.match[1];
-  await ctx.answerCbQuery('Iniciando publicación en Instagram Stories...');
+  await ctx.answerCbQuery('Iniciando publicación en Instagram y Facebook...');
 
   try {
-    await ctx.editMessageCaption('⏳ <b>Publicando en Instagram Stories a través de Meta Graph API...</b>\nPor favor espera unos segundos...', {
+    await ctx.editMessageCaption('⏳ <b>Publicando historia en Instagram y Facebook...</b>\nPor favor espera unos segundos...', {
       parse_mode: 'HTML'
     });
 
@@ -195,23 +209,27 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
       return ctx.editMessageCaption('ℹ️ Esta historia ya fue publicada previamente.');
     }
 
-    // Publicar vía Meta Graph API v21.0
-    const { containerId, mediaId } = await metaService.publishStoryToAll(story.image_url);
+    // Publicación dual vía Meta Graph API v21.0
+    const results = await metaService.publishStoryToAll(story.image_url);
+
+    const igMediaId = results.instagram?.mediaId || 'OK';
+    const fbPostId = results.facebook?.id || results.facebook?.post_id || (results.facebook ? 'OK' : 'No configurado');
 
     // Actualizar registro en Supabase
     await storageService.updateScheduledStoryRecord(storyId, {
       status: 'published',
       published_at: new Date().toISOString(),
-      meta_container_id: containerId,
-      meta_media_id: mediaId
+      meta_container_id: results.instagram?.containerId,
+      meta_media_id: igMediaId
     });
 
     const successCaption = `
-🎉 <b>¡Historia Publicada con Éxito en Instagram Stories!</b>
+🎉 <b>¡Historia Publicada con Éxito!</b>
 
-🆔 <b>ID de Media:</b> <code>${mediaId}</code>
+📸 <b>Instagram Stories:</b> Publicada (ID: <code>${igMediaId}</code>)
+📘 <b>Facebook Stories:</b> ${results.facebook ? `Publicada (ID: <code>${fbPostId}</code>)` : '⚠️ Omitida (Verificar FACEBOOK_PAGE_ID)'}
 🕒 <b>Hora:</b> ${new Date().toLocaleTimeString('es-CO', { timeZone: config.system.timezone })}
-🌐 <b>Estado:</b> En vivo en Instagram
+🌐 <b>Estado:</b> En vivo
     `.trim();
 
     await ctx.editMessageCaption(successCaption, { parse_mode: 'HTML' });
@@ -222,7 +240,7 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
       error_message: error.message
     }).catch(() => {});
 
-    await ctx.editMessageCaption(`⚠️ <b>Error al publicar en Instagram:</b>\n${error.message}`, {
+    await ctx.editMessageCaption(`⚠️ <b>Error durante la publicación:</b>\n${error.message}`, {
       parse_mode: 'HTML'
     });
   }
@@ -259,7 +277,7 @@ bot.action(/^sch:(\d{2}):(\d{2}):(.+)$/, async (ctx) => {
 
 🕒 <b>Hora programada:</b> ${timeLabel} (${formattedTargetTime})
 📍 <b>Zona Horaria:</b> ${config.system.timezone}
-🤖 El servicio publicará automáticamente la historia al cumplirse la hora.
+🤖 El servicio publicará automáticamente la historia en Instagram y Facebook al cumplirse la hora.
     `.trim();
 
     await ctx.editMessageCaption(scheduleCaption, { parse_mode: 'HTML' });
@@ -279,9 +297,7 @@ bot.action(/^disc:(.+)$/, async (ctx) => {
   try {
     const story = await storageService.getStoryById(storyId);
     if (story) {
-      // Eliminar el archivo de Supabase Storage para liberar espacio
       await storageService.deleteSupabaseFile(story.file_path);
-      // Actualizar registro
       await storageService.updateScheduledStoryRecord(storyId, {
         status: 'discarded',
         storage_cleaned: true,
