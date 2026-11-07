@@ -11,7 +11,7 @@ const MAX_POLL_ATTEMPTS = 25; // 25 * 3s = 75s máximo de espera
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Crea un contenedor de media de tipo STORIES en Meta Graph API v21.0.
+ * Crea un contenedor de media de tipo STORIES en Meta Graph API v21.0 para Instagram.
  * 
  * @param {string} imageUrl - URL pública de la imagen (Supabase)
  * @returns {Promise<string>} - ID del contenedor creado
@@ -156,39 +156,49 @@ export async function publishStoryToInstagram(publicImageUrl) {
 
 /**
  * Publica una historia en la Fan Page de Facebook vinculada
+ * obteniendo el Page Access Token desde /me/accounts.
+ * 
+ * @param {string} imageUrl - URL pública de la imagen (Supabase)
+ * @returns {Promise<object|null>}
  */
 export async function publishFacebookStory(imageUrl) {
-  const pageId = config.meta?.facebookPageId || process.env.FACEBOOK_PAGE_ID;
+  const targetPageId = String(config.meta?.facebookPageId || process.env.FACEBOOK_PAGE_ID || '').trim();
   const userAccessToken = config.meta?.accessToken || process.env.META_ACCESS_TOKEN;
 
-  if (!pageId) {
+  if (!targetPageId) {
     console.warn('[META] FACEBOOK_PAGE_ID no configurado. Saltando Facebook Story.');
     return null;
   }
 
   try {
-    // 1. Obtener el Page Access Token de la página (para actuar 'as the page itself')
-    console.log(`[META] Solicitando Page Access Token para la página ${pageId}...`);
-    const pageTokenRes = await axios.get(
-      `https://graph.facebook.com/v21.0/${pageId}`,
+    // 1. Obtener el Page Access Token consultando /me/accounts
+    console.log(`[META] Buscando Page Access Token para la página ${targetPageId}...`);
+    const accountsRes = await axios.get(
+      `${config.meta.graphApiBaseUrl}/me/accounts`,
       {
         params: {
-          fields: 'access_token',
+          fields: 'id,name,access_token',
           access_token: userAccessToken,
         },
         timeout: 15000
       }
     );
 
-    const pageAccessToken = pageTokenRes.data?.access_token;
-    if (!pageAccessToken) {
-      throw new Error('No se pudo obtener el Page Access Token de Meta.');
+    const pages = accountsRes.data?.data || [];
+    const targetPage = pages.find((p) => String(p.id).trim() === targetPageId);
+
+    if (!targetPage || !targetPage.access_token) {
+      const foundIds = pages.map((p) => `${p.name} (${p.id})`).join(', ');
+      throw new Error(`No se encontró la página ${targetPageId} en las autorizadas del token o carece de permisos. Páginas disponibles: [${foundIds || 'ninguna'}]`);
     }
+
+    const pageAccessToken = targetPage.access_token;
+    console.log(`[META] Token obtenido correctamente para la página: ${targetPage.name} (${targetPage.id})`);
 
     // 2. Subir la imagen con el TOKEN DE LA PÁGINA (published: false)
     console.log('[META] Subiendo foto no publicada a la página de Facebook...');
     const uploadRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${pageId}/photos`,
+      `${config.meta.graphApiBaseUrl}/${targetPageId}/photos`,
       null,
       {
         params: {
@@ -200,12 +210,15 @@ export async function publishFacebookStory(imageUrl) {
       }
     );
 
-    const photoId = uploadRes.data.id;
+    const photoId = uploadRes.data?.id;
+    if (!photoId) {
+      throw new Error('No se recibió photoId al subir la imagen a Facebook.');
+    }
 
-    // 3. Crear la historia en la página usando el photoId
-    console.log(`[META] Publicando historia en Facebook (Photo ID: ${photoId})...`);
+    // 3. Crear la historia a partir de la foto subida
+    console.log(`[META] Creando historia en Facebook (Photo ID: ${photoId})...`);
     const storyRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${pageId}/photo_stories`,
+      `${config.meta.graphApiBaseUrl}/${targetPageId}/photo_stories`,
       null,
       {
         params: {
@@ -216,12 +229,12 @@ export async function publishFacebookStory(imageUrl) {
       }
     );
 
-    console.log(`[META] ✅ Historia de Facebook publicada con éxito: ID ${storyRes.data.post_id || storyRes.data.id || 'OK'}`);
+    console.log(`[META] ✅ Historia de Facebook publicada con éxito: ID ${storyRes.data?.post_id || storyRes.data?.id || 'OK'}`);
     return storyRes.data;
   } catch (error) {
     const metaError = error.response?.data?.error;
     const errorDetails = metaError
-      ? `[Meta Error ${metaError.code}]: ${metaError.message}`
+      ? `[Meta Error ${metaError.code} / Subcode ${metaError.error_subcode || 'N/A'}]: ${metaError.message}`
       : error.message;
 
     console.error(`[META ERROR] Error al publicar historia en Facebook: ${errorDetails}`);
@@ -230,7 +243,7 @@ export async function publishFacebookStory(imageUrl) {
 }
 
 /**
- * Publica la historia tanto en Instagram como en Facebook en paralelo.
+ * Publica la historia en Instagram y Facebook de forma simultánea.
  * 
  * @param {string} publicImageUrl - URL pública de la imagen
  * @returns {Promise<{ instagram: object, facebook: object|null }>}
@@ -246,11 +259,11 @@ export async function publishStoryToAll(publicImageUrl) {
     throw err;
   }
 
-  // 2. Disparo a Facebook (captura error individual para no tumbar la confirmación de IG si FB falla)
+  // 2. Disparo a Facebook (captura error individual para no abortar el flujo global)
   try {
     results.facebook = await publishFacebookStory(publicImageUrl);
   } catch (err) {
-    console.error('[META] Fallo al publicar en Facebook:', err.message);
+    console.error('[META] Fallo en la llamada de Facebook:', err.message);
   }
 
   return results;
