@@ -10,6 +10,7 @@ const requiredEnvVars = [
   'SUPABASE_SERVICE_ROLE_KEY',
   'INSTAGRAM_ACCOUNT_ID',
   'META_ACCESS_TOKEN',
+  'FACEBOOK_PAGE_ID',
   'GOOGLE_DRIVE_FOLDER_ID'
 ];
 
@@ -18,7 +19,6 @@ const missingVars = requiredEnvVars.filter((varName) => !process.env[varName] ||
 if (missingVars.length > 0) {
   console.error(`[CRITICAL] Error de configuración: Faltan las siguientes variables de entorno requeridas:\n - ${missingVars.join('\n - ')}`);
   console.error('Por favor configure estas variables en su archivo .env o en el entorno antes de iniciar el servicio.');
-  // En producción salimos si faltan variables críticas
   if (process.env.NODE_ENV === 'production') {
     process.exit(1);
   }
@@ -33,7 +33,7 @@ const allowedTelegramIds = new Set(
     .filter((id) => id.length > 0)
 );
 
-// Normalizar URL de Supabase eliminando subrutas como /rest/v1/ si fueron copiadas directamente del dashboard
+// Normalizar URL de Supabase eliminando subrutas
 function normalizeSupabaseUrl(rawUrl) {
   if (!rawUrl) return '';
   try {
@@ -56,6 +56,7 @@ export const config = Object.freeze({
   },
   meta: {
     instagramAccountId: process.env.INSTAGRAM_ACCOUNT_ID || '',
+    facebookPageId: process.env.FACEBOOK_PAGE_ID || '',
     accessToken: process.env.META_ACCESS_TOKEN || '',
     graphApiVersion: 'v21.0',
     graphApiBaseUrl: 'https://graph.facebook.com/v21.0'
