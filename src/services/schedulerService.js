@@ -89,8 +89,8 @@ export async function processDueScheduledStories() {
         console.log(`[SCHEDULER] Publicando historia ${story.id} en Instagram...`);
 
         // Publicar en Instagram Stories a través de Meta Graph API
-        const { containerId, mediaId } = await metaService.publishStoryToInstagram(story.image_url);
-
+        const { containerId, mediaId } = await metaService.publishStoryToAll(story.image_url);
+        
         // Actualizar registro como publicado
         await storageService.updateScheduledStoryRecord(story.id, {
           status: 'published',
