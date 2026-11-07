@@ -42,7 +42,7 @@ Envía una foto para procesarla y publicarla en Instagram Stories:
 🆔 <b>Tu ID de Telegram:</b> <code>${ctx.from.id}</code>
   `.trim();
 
-  await ctx.reply(welcomeText, { parse_mode: 'HTML' });
+   ctx.reply(welcomeText, { parse_mode: 'HTML' });
 });
 
 bot.command('id', (ctx) => {
@@ -60,22 +60,22 @@ async function handleImageMessage(ctx, fileId) {
   let statusMessage = null;
 
   try {
-    statusMessage = await ctx.reply('⏳ <i>Descargando imagen y procesando formato Historia 9:16...</i>', {
+    statusMessage =  ctx.reply('⏳ <i>Descargando imagen y procesando formato Historia 9:16...</i>', {
       parse_mode: 'HTML'
     });
 
     // 1. Obtener enlace de descarga de Telegram
-    const fileLink = await ctx.telegram.getFileLink(fileId);
+    const fileLink =  ctx.telegram.getFileLink(fileId);
 
     // 2. Descargar imagen en memoria como Buffer
-    const downloadResponse = await axios.get(fileLink.href, {
+    const downloadResponse =  axios.get(fileLink.href, {
       responseType: 'arraybuffer',
       timeout: 30000
     });
     const rawBuffer = Buffer.from(downloadResponse.data);
 
     // 3. Procesar imagen con Sharp (1080x1920, cover attention, plantilla PNG y SVG fecha)
-    const processedBuffer = await imageProcessor.processStoryImage(rawBuffer);
+    const processedBuffer =  imageProcessor.processStoryImage(rawBuffer);
 
     // Actualizar mensaje de estado
     await ctx.telegram.editMessageText(
@@ -196,7 +196,7 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
     }
 
     // Publicar vía Meta Graph API v21.0
-    const { containerId, mediaId } = await metaService.publishStoryToInstagram(story.image_url);
+    const { containerId, mediaId } = await metaService.publishStoryToAll(story.image_url);
 
     // Actualizar registro en Supabase
     await storageService.updateScheduledStoryRecord(storyId, {
