@@ -218,13 +218,13 @@ export async function publishFacebookStory(imageUrl) {
   }
 }
 /**
- * Publica la historia en Instagram y Facebook de forma simultánea.
+ * Publica la historia en Instagram, Facebook y WhatsApp de forma simultánea.
  * 
  * @param {string} publicImageUrl - URL pública de la imagen
- * @returns {Promise<{ instagram: object, facebook: object|null }>}
+ * @returns {Promise<{ instagram: object, facebook: object|null, whatsapp: object|null }>}
  */
 export async function publishStoryToAll(publicImageUrl) {
-  const results = { instagram: null, facebook: null };
+  const results = { instagram: null, facebook: null, whatsapp: null };
 
   // 1. Disparo a Instagram
   try {
@@ -241,9 +241,15 @@ export async function publishStoryToAll(publicImageUrl) {
     console.error('[META] Fallo en la llamada de Facebook:', err.message);
   }
 
+  // 3. Disparo a WhatsApp Business (Estados vía Evolution API)
+  try {
+    results.whatsapp = await publishWhatsAppStatus(publicImageUrl);
+  } catch (err) {
+    console.error('[WHATSAPP] Fallo en la llamada de WhatsApp:', err.message);
+  }
+
   return results;
 }
-
 export default {
   createStoryMediaContainer,
   pollStoryContainerStatus,
