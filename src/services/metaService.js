@@ -1,5 +1,6 @@
 import axios from 'axios';
 import config from '../config/env.js';
+import { publishWhatsAppStatus } from './whatsappService.js';
 
 const SLEEP_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 25; // 25 * 3s = 75s máximo de espera
