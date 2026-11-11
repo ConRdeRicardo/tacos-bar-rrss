@@ -226,14 +226,14 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
     const successCaption = `
 🎉 <b>¡Historia Publicada con Éxito!</b>
 
-let msg = `✅ *Historia publicada exitosamente:*\n\n`;
-msg += `📸 *Instagram:* Publicada\n`;
-if (publishRes.facebook) {
-  msg += `📘 *Facebook:* Publicada\n`;
-}
-if (publishRes.whatsapp) {
-  msg += `🟢 *WhatsApp:* Estado publicado\n`;
-}
+let msg = '✅ *Historia publicada exitosamente:*\n\n';
+        msg += '📸 *Instagram:* Publicada\n';
+        if (publishRes && publishRes.facebook) {
+          msg += '📘 *Facebook:* Publicada\n';
+        }
+        if (publishRes && publishRes.whatsapp) {
+          msg += '🟢 *WhatsApp:* Estado publicado\n';
+        }
 
 📸 <b>Instagram Stories:</b> Publicada (ID: <code>${igMediaId}</code>)
 📘 <b>Facebook Stories:</b> ${results.facebook ? `Publicada (ID: <code>${fbPostId}</code>)` : '⚠️ Omitida (Verificar FACEBOOK_PAGE_ID)'}
