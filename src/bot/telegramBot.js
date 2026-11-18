@@ -6,7 +6,16 @@ import storageService from '../services/storageService.js';
 import metaService from '../services/metaService.js';
 import schedulerService from '../services/schedulerService.js';
 
-export const bot = new Telegraf(config.telegram.token || '000000000:PLACEHOLDER_TOKEN_FOR_DEV');
+export const bot = new Telegraf(config.telegram.token || '000000000:PLACEHOLDER_TOKEN_FOR_DEV', {
+  handlerTimeout: 300000 // 5 minutos para evitar cortes en renderizado o subida de videos
+});
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 // ==============================================================================
 // 1. MIDDLEWARE DE SEGURIDAD (FILTRO DE USUARIOS AUTORIZADOS)
@@ -52,10 +61,6 @@ bot.command('id', (ctx) => {
 // ==============================================================================
 // 3. CONTROLADOR MULTIMEDIA (FOTOS, VIDEOS Y DOCUMENTOS)
 // ==============================================================================
-
-/**
- * Procesa la imagen o video recibido (descarga, Sharp/FFmpeg, Supabase, Drive y botones de acción).
- */
 async function handleMediaMessage(ctx, fileId, isVideoInput = false) {
   let statusMessage = null;
 
@@ -67,10 +72,8 @@ async function handleMediaMessage(ctx, fileId, isVideoInput = false) {
       { parse_mode: 'HTML' }
     );
 
-    // 1. Obtener enlace de descarga de Telegram
     const fileLink = await ctx.telegram.getFileLink(fileId);
 
-    // 2. Descargar archivo en memoria como Buffer
     const downloadResponse = await axios.get(fileLink.href, {
       responseType: 'arraybuffer',
       timeout: 60000,
@@ -79,15 +82,12 @@ async function handleMediaMessage(ctx, fileId, isVideoInput = false) {
     });
     const rawBuffer = Buffer.from(downloadResponse.data);
 
-    // Detectar si es video por el tipo de mensaje o por la cabecera del archivo
     const isVideo = isVideoInput || imageProcessor.isVideoBuffer(rawBuffer);
 
-    // 3. Procesar imagen con Sharp o video con FFmpeg (1080x1920 + plantilla PNG)
     const processedBuffer = isVideo
       ? await imageProcessor.processStoryVideo(rawBuffer)
       : await imageProcessor.processStoryImage(rawBuffer);
 
-    // Actualizar mensaje de estado
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       statusMessage.message_id,
@@ -96,10 +96,8 @@ async function handleMediaMessage(ctx, fileId, isVideoInput = false) {
       { parse_mode: 'HTML' }
     );
 
-    // 4. Subida dual: Supabase (48h) y Google Drive (permanente)
     const storageResult = await storageService.uploadStoryDual(processedBuffer);
 
-    // 5. Crear registro inicial en la tabla `scheduled_stories` en estado 'pending_review'
     const storyRecord = await storageService.insertScheduledStoryRecord({
       telegramUserId: ctx.from.id,
       telegramChatId: ctx.chat.id,
@@ -110,12 +108,10 @@ async function handleMediaMessage(ctx, fileId, isVideoInput = false) {
       status: 'pending_review'
     });
 
-    // Eliminar el mensaje de carga
     try {
       await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
     } catch (_) {}
 
-    // 6. Enviar previsualización con teclado inline interactivo
     const driveLinkText = storageResult.driveWebLink
       ? `<a href="${storageResult.driveWebLink}">Ver en Google Drive</a>`
       : '✅ Asegurado';
@@ -139,7 +135,6 @@ Selecciona una acción para continuar:
       [Markup.button.callback('❌ Descartar', `disc:${storyRecord.id}`)]
     ]);
 
-    // 1. Enviar previsualización (Video o Foto) con botones de publicación
     if (isVideo) {
       await ctx.replyWithVideo(
         { source: processedBuffer, filename: `historia_${Date.now()}.mp4` },
@@ -160,7 +155,6 @@ Selecciona una acción para continuar:
       );
     }
 
-    // 2. Enviar el archivo original sin compresión para descarga directa
     await ctx.replyWithDocument(
       { source: processedBuffer, filename: `historia_${Date.now()}.${extension}` },
       {
@@ -168,7 +162,6 @@ Selecciona una acción para continuar:
         parse_mode: 'HTML'
       }
     );
-
   } catch (error) {
     console.error(`[ERROR BOT] Fallo al procesar multimedia: ${error.message}`);
     if (statusMessage) {
@@ -177,17 +170,16 @@ Selecciona una acción para continuar:
           ctx.chat.id,
           statusMessage.message_id,
           null,
-          `❌ <b>Error durante el procesamiento:</b>\n${error.message}`,
+          `❌ <b>Error durante el procesamiento:</b>\n${escapeHtml(error.message)}`,
           { parse_mode: 'HTML' }
         );
         return;
       } catch (_) {}
     }
-    await ctx.reply(`❌ <b>Ocurrió un error:</b> ${error.message}`, { parse_mode: 'HTML' });
+    await ctx.reply(`❌ <b>Ocurrió un error:</b> ${escapeHtml(error.message)}`, { parse_mode: 'HTML' });
   }
 }
 
-// Escuchar fotos estándar
 bot.on('photo', async (ctx) => {
   const photos = ctx.message.photo;
   if (!photos || photos.length === 0) return;
@@ -196,7 +188,6 @@ bot.on('photo', async (ctx) => {
   await handleMediaMessage(ctx, highestResPhoto.file_id, false);
 });
 
-// Escuchar videos estándar
 bot.on('video', async (ctx) => {
   const video = ctx.message.video;
   if (!video) return;
@@ -204,7 +195,6 @@ bot.on('video', async (ctx) => {
   await handleMediaMessage(ctx, video.file_id, true);
 });
 
-// Escuchar videos cortos sin audio que Telegram envía como animación/GIF
 bot.on('animation', async (ctx) => {
   const animation = ctx.message.animation;
   if (!animation) return;
@@ -212,7 +202,6 @@ bot.on('animation', async (ctx) => {
   await handleMediaMessage(ctx, animation.file_id, true);
 });
 
-// Escuchar documentos (fotos o videos enviados como archivo sin compresión)
 bot.on('document', async (ctx) => {
   const doc = ctx.message.document;
   if (!doc || !doc.mime_type) return;
@@ -231,14 +220,13 @@ bot.on('document', async (ctx) => {
 // 4. ACCIONES DEL TECLADO INLINE (CALLBACK QUERIES)
 // ==============================================================================
 
-// Acción: Publicar Historia Ahora (Instagram + Facebook + WhatsApp)
 bot.action(/^pub:(.+)$/, async (ctx) => {
   const storyId = ctx.match[1];
   await ctx.answerCbQuery('Iniciando publicación en IG, FB y WhatsApp...');
 
   try {
     await ctx.editMessageCaption(
-      '⏳ <b>Publicando historia en Instagram, Facebook y WhatsApp...</b>\nPor favor espera unos segundos (los videos pueden tardar hasta 30s)...',
+      '⏳ <b>Publicando historia en Instagram, Facebook y WhatsApp...</b>\nPor favor espera unos segundos...',
       { parse_mode: 'HTML' }
     );
 
@@ -251,32 +239,40 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
       return ctx.editMessageCaption('ℹ️ Esta historia ya fue publicada previamente.');
     }
 
-    // Publicación simultánea en Instagram, Facebook y WhatsApp
     const results = await metaService.publishStoryToAll(story.image_url);
 
-    const igMediaId = results.instagram?.mediaId || 'OK';
-    const fbPostId = results.facebook?.id || results.facebook?.post_id || 'OK';
-    const waStatusId = results.whatsapp?.key?.id || 'OK';
+    const anyPublished = Boolean(results.instagram?.ok || results.facebook?.ok || results.whatsapp?.ok);
 
-    // Actualizar registro en Supabase
     await storageService.updateScheduledStoryRecord(storyId, {
-      status: 'published',
-      published_at: new Date().toISOString(),
-      meta_container_id: results.instagram?.containerId,
-      meta_media_id: igMediaId
+      status: anyPublished ? 'published' : 'failed',
+      published_at: anyPublished ? new Date().toISOString() : null,
+      meta_container_id: results.instagram?.containerId || null,
+      meta_media_id: results.instagram?.mediaId || null,
+      error_message: anyPublished ? null : JSON.stringify(results)
     });
 
-    const successCaption = `
-🎉 <b>¡Historia Publicada con Éxito!</b>
+    const igLine = results.instagram?.ok
+      ? `✅ Publicada (ID: <code>${escapeHtml(results.instagram.mediaId)}</code>)`
+      : `❌ Error: ${escapeHtml(results.instagram?.error)}`;
 
-📸 <b>Instagram Stories:</b> Publicada (ID: <code>${igMediaId}</code>)
-📘 <b>Facebook Stories:</b> ${results.facebook ? `Publicada (ID: <code>${fbPostId}</code>)` : '⚠️ No publicada'}
-🟢 <b>WhatsApp Estado:</b> ${results.whatsapp ? `Publicado (ID: <code>${waStatusId}</code>)` : '⚠️ No publicado'}
+    const fbLine = results.facebook?.ok
+      ? `✅ Publicada (ID: <code>${escapeHtml(results.facebook.id)}</code>)`
+      : `❌ Error: ${escapeHtml(results.facebook?.error)}`;
+
+    const waLine = results.whatsapp?.ok
+      ? `✅ Publicado (ID: <code>${escapeHtml(results.whatsapp.id)}</code>)`
+      : `❌ Error: ${escapeHtml(results.whatsapp?.error)}`;
+
+    const summaryCaption = `
+${anyPublished ? '🎉 <b>¡Resultado de Publicación!</b>' : '⚠️ <b>No se pudo publicar en ninguna red</b>'}
+
+📸 <b>Instagram:</b> ${igLine}
+📘 <b>Facebook:</b> ${fbLine}
+🟢 <b>WhatsApp:</b> ${waLine}
 🕒 <b>Hora:</b> ${new Date().toLocaleTimeString('es-CO', { timeZone: config.system.timezone })}
-🌐 <b>Estado:</b> En vivo
     `.trim();
 
-    await ctx.editMessageCaption(successCaption, { parse_mode: 'HTML' });
+    await ctx.editMessageCaption(summaryCaption, { parse_mode: 'HTML' });
   } catch (error) {
     console.error(`[ERROR ACCIÓN PUBLICAR] ${error.message}`);
     await storageService.updateScheduledStoryRecord(storyId, {
@@ -284,13 +280,17 @@ bot.action(/^pub:(.+)$/, async (ctx) => {
       error_message: error.message
     }).catch(() => {});
 
-    await ctx.editMessageCaption(`⚠️ <b>Error durante la publicación:</b>\n${error.message}`, {
-      parse_mode: 'HTML'
-    });
+    const safeError = escapeHtml(error.message);
+    try {
+      await ctx.editMessageCaption(`⚠️ <b>Error durante la publicación:</b>\n${safeError}`, {
+        parse_mode: 'HTML'
+      });
+    } catch (_) {
+      await ctx.editMessageCaption(`⚠️ Error durante la publicación: ${error.message}`).catch(() => {});
+    }
   }
 });
 
-// Acción: Programar Historia (ej. 10:00 PM o 11:30 PM)
 bot.action(/^sch:(\d{2}):(\d{2}):(.+)$/, async (ctx) => {
   const targetHour = parseInt(ctx.match[1], 10);
   const targetMinute = parseInt(ctx.match[2], 10);
@@ -327,13 +327,12 @@ bot.action(/^sch:(\d{2}):(\d{2}):(.+)$/, async (ctx) => {
     await ctx.editMessageCaption(scheduleCaption, { parse_mode: 'HTML' });
   } catch (error) {
     console.error(`[ERROR ACCIÓN PROGRAMAR] ${error.message}`);
-    await ctx.editMessageCaption(`⚠️ <b>Error al programar la historia:</b>\n${error.message}`, {
+    await ctx.editMessageCaption(`⚠️ <b>Error al programar la historia:</b>\n${escapeHtml(error.message)}`, {
       parse_mode: 'HTML'
     });
   }
 });
 
-// Acción: Descartar Historia
 bot.action(/^disc:(.+)$/, async (ctx) => {
   const storyId = ctx.match[1];
   await ctx.answerCbQuery('Historia descartada');
