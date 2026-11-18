@@ -48,22 +48,45 @@ function getDriveClient() {
 }
 
 /**
- * Sube la imagen a Supabase Storage en el bucket configurado ('social-media').
+ * Detecta automáticamente si el buffer o nombre de archivo corresponde a un video MP4 o a una imagen JPEG.
+ */
+function detectMediaType(buffer, fileName = '') {
+  const header =
+    Buffer.isBuffer(buffer) && buffer.length >= 12
+      ? buffer.subarray(4, 12).toString('ascii')
+      : '';
+  const isVideoByHeader =
+    header.includes('ftyp') || header.includes('moov') || header.includes('wide');
+  const isVideoByName = String(fileName).toLowerCase().endsWith('.mp4');
+  const isVideo = isVideoByHeader || isVideoByName;
+
+  return {
+    isVideo,
+    extension: isVideo ? 'mp4' : 'jpg',
+    mimeType: isVideo ? 'video/mp4' : 'image/jpeg'
+  };
+}
+
+/**
+ * Sube la imagen o video a Supabase Storage en el bucket configurado ('social-media').
  * 
- * @param {Buffer} buffer - Imagen procesada en buffer
- * @param {string} filePath - Ruta dentro del bucket (ej. 'stories/story_12345.jpg')
+ * @param {Buffer} buffer - Archivo procesado en buffer
+ * @param {string} filePath - Ruta dentro del bucket (ej. 'stories/story_12345.jpg' o '.mp4')
+ * @param {string} [mimeType] - Tipo MIME opcional ('image/jpeg' o 'video/mp4')
  * @returns {Promise<{ filePath: string, publicUrl: string }>}
  */
-export async function uploadToSupabaseStorage(buffer, filePath) {
+export async function uploadToSupabaseStorage(buffer, filePath, mimeType) {
+  const resolvedMimeType = mimeType || detectMediaType(buffer, filePath).mimeType;
+
   const { data, error } = await supabase.storage
     .from(config.supabase.bucketName)
     .upload(filePath, buffer, {
-      contentType: 'image/jpeg',
+      contentType: resolvedMimeType,
       upsert: true
     });
 
   if (error) {
-    throw new Error(`Error subiendo imagen a Supabase Storage: ${error.message}`);
+    throw new Error(`Error subiendo archivo a Supabase Storage: ${error.message}`);
   }
 
   const { data: publicUrlData } = supabase.storage
@@ -81,18 +104,21 @@ export async function uploadToSupabaseStorage(buffer, filePath) {
 }
 
 /**
- * Sube una copia permanente de la imagen a Google Drive en la carpeta especificada.
+ * Sube una copia permanente de la imagen o video a Google Drive en la carpeta especificada.
  * 
- * @param {Buffer} buffer - Imagen a respaldar
+ * @param {Buffer} buffer - Archivo a respaldar
  * @param {string} fileName - Nombre del archivo en Drive
+ * @param {string} [mimeType] - Tipo MIME opcional ('image/jpeg' o 'video/mp4')
  * @returns {Promise<{ driveFileId: string | null, driveWebLink: string | null }>}
  */
-export async function uploadToGoogleDrive(buffer, fileName) {
+export async function uploadToGoogleDrive(buffer, fileName, mimeType) {
   const drive = getDriveClient();
   if (!drive || !config.googleDrive.folderId) {
     console.warn('[WARN] Google Drive no está configurado o no se encontró credenciales. Omitiendo respaldo en Drive.');
     return { driveFileId: null, driveWebLink: null };
   }
+
+  const resolvedMimeType = mimeType || detectMediaType(buffer, fileName).mimeType;
 
   try {
     const mediaStream = Readable.from(buffer);
@@ -103,7 +129,7 @@ export async function uploadToGoogleDrive(buffer, fileName) {
         parents: [config.googleDrive.folderId]
       },
       media: {
-        mimeType: 'image/jpeg',
+        mimeType: resolvedMimeType,
         body: mediaStream
       },
       fields: 'id, name, webViewLink'
@@ -123,19 +149,20 @@ export async function uploadToGoogleDrive(buffer, fileName) {
 /**
  * Almacenamiento Dual: Ejecuta la subida a Supabase Storage y a Google Drive de manera concurrente.
  * 
- * @param {Buffer} buffer - Buffer de imagen JPEG procesada
+ * @param {Buffer} buffer - Buffer de imagen JPEG o video MP4 procesado
  * @param {string} [customName] - Nombre base opcional
  * @returns {Promise<{ filePath: string, publicUrl: string, driveFileId: string | null, driveWebLink: string | null }>}
  */
 export async function uploadStoryDual(buffer, customName) {
   const timestamp = Date.now();
-  const fileName = customName || `story_${timestamp}.jpg`;
+  const { extension, mimeType } = detectMediaType(buffer, customName);
+  const fileName = customName || `story_${timestamp}.${extension}`;
   const storageFilePath = `stories/${fileName}`;
 
   // Ejecución simultánea en Supabase y Google Drive
   const [supabaseResult, driveResult] = await Promise.all([
-    uploadToSupabaseStorage(buffer, storageFilePath),
-    uploadToGoogleDrive(buffer, fileName)
+    uploadToSupabaseStorage(buffer, storageFilePath, mimeType),
+    uploadToGoogleDrive(buffer, fileName, mimeType)
   ]);
 
   return {
