@@ -1,11 +1,6 @@
 import axios from 'axios';
 
-/**
- * Publica una imagen en los Estados de WhatsApp Business vía Evolution API v2
- * @param {string} imageUrl - URL pública de la imagen en Supabase
- * @param {string} caption - Texto de pie de foto (opcional)
- */
-export async function publishWhatsAppStatus(imageUrl, caption = '') {
+export async function publishWhatsAppStatus(mediaUrl, caption = '') {
   const evolutionUrl = process.env.EVOLUTION_API_URL?.replace(/\/+$/, '');
   const apiKey = process.env.EVOLUTION_API_KEY;
   const instance = process.env.EVOLUTION_INSTANCE_NAME || 'tacosbar';
@@ -15,25 +10,25 @@ export async function publishWhatsAppStatus(imageUrl, caption = '') {
     return null;
   }
 
-  try {
-    console.log(`[WHATSAPP] Publicando estado en la instancia '${instance}'...`);
+  const isVideo = mediaUrl.toLowerCase().includes('.mp4');
 
-    const endpoint = `${evolutionUrl}/message/sendStatus/${instance}`;
-    
+  try {
+    console.log(`[WHATSAPP] Publicando estado (${isVideo ? 'VIDEO' : 'IMAGEN'}) en '${instance}'...`);
+
     const response = await axios.post(
-      endpoint,
+      `${evolutionUrl}/message/sendStatus/${instance}`,
       {
-        type: 'image',
-        content: imageUrl,
+        type: isVideo ? 'video' : 'image',
+        content: mediaUrl,
         caption: caption,
-        allContacts: true // Se publica para todos los contactos agendados
+        allContacts: true
       },
       {
         headers: {
           apikey: apiKey,
           'Content-Type': 'application/json'
         },
-        timeout: 25000
+        timeout: 45000
       }
     );
 
