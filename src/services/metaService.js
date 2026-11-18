@@ -3,13 +3,10 @@ import config from '../config/env.js';
 import { publishWhatsAppStatus } from './whatsappService.js';
 
 const SLEEP_INTERVAL_MS = 3000;
-const MAX_POLL_ATTEMPTS = 35; // Hasta 105s para dar tiempo al renderizado de video en Meta
+const MAX_POLL_ATTEMPTS = 40;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Crea contenedor de historia en Instagram (Foto o Video automáticamente)
- */
 export async function createStoryMediaContainer(mediaUrl) {
   const endpoint = `${config.meta.graphApiBaseUrl}/${config.meta.instagramAccountId}/media`;
   const isVideo = mediaUrl.toLowerCase().includes('.mp4');
@@ -26,24 +23,23 @@ export async function createStoryMediaContainer(mediaUrl) {
   }
 
   try {
-    const response = await axios.post(endpoint, null, { params, timeout: 25000 });
+    console.log(`[META IG] Creando contenedor (${isVideo ? 'VIDEO' : 'IMAGEN'})...`);
+    const response = await axios.post(endpoint, null, { params, timeout: 30000 });
     if (!response.data?.id) {
-      throw new Error('Respuesta inválida de Meta: No se recibió container_id.');
+      throw new Error('Meta no devolvió container_id.');
     }
+    console.log(`[META IG] Contenedor creado: ${response.data.id}`);
     return response.data.id;
   } catch (error) {
     const metaError = error.response?.data?.error;
     const errorDetails = metaError
-      ? `[Meta Error ${metaError.code} / Subcode ${metaError.error_subcode || 'N/A'}]: ${metaError.message}`
+      ? `Meta ${metaError.code} (${metaError.error_subcode || 'N/A'}): ${metaError.message}`
       : error.message;
-    console.error(`[ERROR] Fallo al crear contenedor en Instagram: ${errorDetails}`);
+    console.error(`[META IG ERROR] ${errorDetails}`);
     throw new Error(errorDetails);
   }
 }
 
-/**
- * Polling del estado del contenedor en Instagram
- */
 export async function pollStoryContainerStatus(containerId) {
   const endpoint = `${config.meta.graphApiBaseUrl}/${containerId}`;
   let attempts = 0;
@@ -60,25 +56,24 @@ export async function pollStoryContainerStatus(containerId) {
       });
 
       const { status_code, status } = response.data;
+      console.log(`[META IG] Polling #${attempts} (${containerId}): ${status_code}`);
+
       if (status_code === 'FINISHED') return true;
 
       if (status_code === 'ERROR' || status_code === 'EXPIRED') {
-        throw new Error(`El procesamiento del contenedor falló en Meta: ${status_code} (${status || 'Sin detalle'})`);
+        throw new Error(`Meta rechazó el archivo: ${status_code} (${status || 'Sin detalle'})`);
       }
 
       await sleep(SLEEP_INTERVAL_MS);
     } catch (error) {
-      if (error.message.includes('falló en Meta')) throw error;
+      if (error.message.includes('Meta rechazó')) throw error;
       await sleep(SLEEP_INTERVAL_MS);
     }
   }
 
-  throw new Error(`Timeout esperando que el contenedor ${containerId} esté listo en Meta.`);
+  throw new Error(`Timeout esperando procesamiento de Meta (${containerId}).`);
 }
 
-/**
- * Publica el contenedor de historia en Instagram
- */
 export async function publishStoryMediaContainer(containerId) {
   const endpoint = `${config.meta.graphApiBaseUrl}/${config.meta.instagramAccountId}/media_publish`;
 
@@ -90,7 +85,7 @@ export async function publishStoryMediaContainer(containerId) {
         creation_id: containerId,
         access_token: config.meta.accessToken
       },
-      timeout: 25000
+      timeout: 30000
     }
   );
 
@@ -100,34 +95,27 @@ export async function publishStoryMediaContainer(containerId) {
   return response.data.id;
 }
 
-/**
- * Flujo completo de publicación en Instagram (Foto o Video)
- */
 export async function publishStoryToInstagram(publicMediaUrl) {
   const containerId = await createStoryMediaContainer(publicMediaUrl);
   await pollStoryContainerStatus(containerId);
   const mediaId = await publishStoryMediaContainer(containerId);
-  return { containerId, mediaId };
+  console.log(`[META IG] ✅ Historia publicada en Instagram: ${mediaId}`);
+  return { ok: true, containerId, mediaId };
 }
 
-/**
- * Publica historia en Facebook Page (Foto o Video automáticamente)
- */
 export async function publishFacebookStory(mediaUrl) {
   const targetPageId = String(config.meta?.facebookPageId || process.env.FACEBOOK_PAGE_ID || '').trim();
   const pageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN || config.meta?.accessToken || process.env.META_ACCESS_TOKEN;
 
   if (!targetPageId) {
-    console.warn('[META] FACEBOOK_PAGE_ID no configurado. Saltando Facebook Story.');
-    return null;
+    return { ok: false, error: 'FACEBOOK_PAGE_ID no configurado' };
   }
 
   const isVideo = mediaUrl.toLowerCase().includes('.mp4');
 
   try {
     if (isVideo) {
-      // FLUJO PARA VIDEO STORIES EN FACEBOOK (3 fases de Meta API)
-      console.log(`[META] 1/3 Iniciando sesión de subida de Video Story en Facebook (${targetPageId})...`);
+      console.log(`[META FB] 1/3 Iniciando subida de Video Story (${targetPageId})...`);
       const startRes = await axios.post(
         `${config.meta.graphApiBaseUrl}/${targetPageId}/video_stories`,
         null,
@@ -136,13 +124,13 @@ export async function publishFacebookStory(mediaUrl) {
             upload_phase: 'start',
             access_token: pageAccessToken
           },
-          timeout: 20000
+          timeout: 25000
         }
       );
 
       const { video_id, upload_url } = startRes.data;
 
-      console.log(`[META] 2/3 Enviando archivo de video a Facebook (Video ID: ${video_id})...`);
+      console.log(`[META FB] 2/3 Enviando archivo de video (${video_id})...`);
       await axios.post(upload_url, null, {
         headers: {
           Authorization: `OAuth ${pageAccessToken}`,
@@ -151,7 +139,7 @@ export async function publishFacebookStory(mediaUrl) {
         timeout: 60000
       });
 
-      console.log(`[META] 3/3 Finalizando y publicando Video Story en Facebook...`);
+      console.log(`[META FB] 3/3 Finalizando Video Story (${video_id})...`);
       const finishRes = await axios.post(
         `${config.meta.graphApiBaseUrl}/${targetPageId}/video_stories`,
         null,
@@ -161,15 +149,15 @@ export async function publishFacebookStory(mediaUrl) {
             upload_phase: 'finish',
             access_token: pageAccessToken
           },
-          timeout: 25000
+          timeout: 30000
         }
       );
 
-      console.log(`[META] ✅ Video Story de Facebook publicada: ID ${finishRes.data?.post_id || video_id}`);
-      return finishRes.data;
+      const postId = finishRes.data?.post_id || video_id || 'OK';
+      console.log(`[META FB] ✅ Video Story publicada en Facebook: ${postId}`);
+      return { ok: true, id: postId };
     } else {
-      // FLUJO PARA FOTO STORIES EN FACEBOOK
-      console.log(`[META] Subiendo foto no publicada a la página ${targetPageId}...`);
+      console.log(`[META FB] Subiendo foto a la página ${targetPageId}...`);
       const uploadRes = await axios.post(
         `${config.meta.graphApiBaseUrl}/${targetPageId}/photos`,
         null,
@@ -179,7 +167,7 @@ export async function publishFacebookStory(mediaUrl) {
             published: false,
             access_token: pageAccessToken
           },
-          timeout: 20000
+          timeout: 25000
         }
       );
 
@@ -192,49 +180,48 @@ export async function publishFacebookStory(mediaUrl) {
             photo_id: photoId,
             access_token: pageAccessToken
           },
-          timeout: 20000
+          timeout: 25000
         }
       );
 
-      console.log(`[META] ✅ Foto Story de Facebook publicada: ID ${storyRes.data?.post_id || 'OK'}`);
-      return storyRes.data;
+      const postId = storyRes.data?.post_id || storyRes.data?.id || 'OK';
+      console.log(`[META FB] ✅ Foto Story publicada en Facebook: ${postId}`);
+      return { ok: true, id: postId };
     }
   } catch (error) {
     const metaError = error.response?.data?.error;
     const errorDetails = metaError
-      ? `[Meta Error ${metaError.code} / Subcode ${metaError.error_subcode || 'N/A'}]: ${metaError.message}`
+      ? `Meta ${metaError.code} (${metaError.error_subcode || 'N/A'}): ${metaError.message}`
       : error.message;
-    console.error(`[META ERROR] Error al publicar historia en Facebook: ${errorDetails}`);
-    return null;
+    console.error(`[META FB ERROR] ${errorDetails}`);
+    return { ok: false, error: errorDetails };
   }
 }
 
 /**
- * Publica simultáneamente en Instagram, Facebook y WhatsApp
+ * Publica en Instagram, Facebook y WhatsApp EN PARALELO para reducir el tiempo a la mitad
  */
 export async function publishStoryToAll(publicMediaUrl) {
-  const results = { instagram: null, facebook: null, whatsapp: null };
+  const [igSettled, fbSettled, waSettled] = await Promise.allSettled([
+    publishStoryToInstagram(publicMediaUrl),
+    publishFacebookStory(publicMediaUrl),
+    publishWhatsAppStatus(publicMediaUrl)
+  ]);
 
-  try {
-    results.instagram = await publishStoryToInstagram(publicMediaUrl);
-  } catch (err) {
-    console.error('[META] Fallo al publicar en Instagram:', err.message);
-    throw err;
-  }
-
-  try {
-    results.facebook = await publishFacebookStory(publicMediaUrl);
-  } catch (err) {
-    console.error('[META] Fallo en la llamada de Facebook:', err.message);
-  }
-
-  try {
-    results.whatsapp = await publishWhatsAppStatus(publicMediaUrl);
-  } catch (err) {
-    console.error('[WHATSAPP] Fallo en la llamada de WhatsApp:', err.message);
-  }
-
-  return results;
+  return {
+    instagram:
+      igSettled.status === 'fulfilled'
+        ? igSettled.value
+        : { ok: false, error: igSettled.reason?.message || 'Error en Instagram' },
+    facebook:
+      fbSettled.status === 'fulfilled'
+        ? fbSettled.value
+        : { ok: false, error: fbSettled.reason?.message || 'Error en Facebook' },
+    whatsapp:
+      waSettled.status === 'fulfilled'
+        ? waSettled.value
+        : { ok: false, error: waSettled.reason?.message || 'Error en WhatsApp' }
+  };
 }
 
 export default {
