@@ -3,6 +3,7 @@
 # ==============================================================================
 
 FROM node:20-bookworm-slim AS production
+RUN apk add --no-cache ffmpeg || (apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*)
 
 # Variables de entorno de Node
 ENV NODE_ENV=production \
