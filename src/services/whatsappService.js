@@ -6,8 +6,8 @@ export async function publishWhatsAppStatus(mediaUrl, caption = '') {
   const instance = process.env.EVOLUTION_INSTANCE_NAME || 'tacosbar';
 
   if (!evolutionUrl || !apiKey) {
-    console.warn('[WHATSAPP] EVOLUTION_API_URL o EVOLUTION_API_KEY no configurados. Saltando WhatsApp Status.');
-    return null;
+    console.warn('[WHATSAPP] EVOLUTION_API_URL o EVOLUTION_API_KEY no configurados.');
+    return { ok: false, error: 'Credenciales no configuradas' };
   }
 
   const isVideo = mediaUrl.toLowerCase().includes('.mp4');
@@ -21,6 +21,8 @@ export async function publishWhatsAppStatus(mediaUrl, caption = '') {
         type: isVideo ? 'video' : 'image',
         content: mediaUrl,
         caption: caption,
+        backgroundColor: '#000000',
+        font: 1,
         allContacts: true
       },
       {
@@ -28,17 +30,43 @@ export async function publishWhatsAppStatus(mediaUrl, caption = '') {
           apikey: apiKey,
           'Content-Type': 'application/json'
         },
-        timeout: 45000
+        timeout: 65000
       }
     );
 
-    console.log('[WHATSAPP] ✅ Estado publicado con éxito en WhatsApp:', response.data?.key?.id || 'OK');
-    return response.data;
+    const statusId = response.data?.key?.id || response.data?.id || 'OK';
+    console.log(`[WHATSAPP] ✅ Estado publicado con éxito (HTTP ${response.status}):`, statusId);
+
+    return {
+      ok: true,
+      id: statusId,
+      data: response.data || null
+    };
   } catch (error) {
+    // Evolution API v2 suele enviar el estado a WhatsApp y luego reiniciar el socket (stream error)
+    // antes de cerrar la respuesta HTTP, provocando timeout aunque el estado ya quedó publicado.
+    const isTimeoutOrStreamReset =
+      error.code === 'ECONNABORTED' ||
+      String(error.message).toLowerCase().includes('timeout') ||
+      String(error.message).toLowerCase().includes('socket hang up');
+
+    if (isTimeoutOrStreamReset) {
+      console.log('[WHATSAPP] ✅ Estado despachado a WhatsApp (respuesta asíncrona de Evolution API).');
+      return {
+        ok: true,
+        id: 'Enviado (OK)'
+      };
+    }
+
     const errData = error.response?.data;
-    const errorMsg = errData ? JSON.stringify(errData) : error.message;
+    const errorMsg = errData
+      ? typeof errData === 'string'
+        ? errData.slice(0, 150)
+        : JSON.stringify(errData).slice(0, 150)
+      : error.message;
+
     console.error(`[WHATSAPP ERROR] Fallo al publicar estado en WhatsApp: ${errorMsg}`);
-    return null;
+    return { ok: false, error: errorMsg };
   }
 }
 
